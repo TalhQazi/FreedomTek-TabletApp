@@ -41,6 +41,12 @@ export function AuthProvider({ children }) {
           refreshToken: next.refreshToken || null,
         })
       );
+      // Also store access token under a simple key for API helpers like walletApi
+      if (next.accessToken) {
+        await AsyncStorage.setItem('auth_access_token', next.accessToken);
+      } else {
+        await AsyncStorage.removeItem('auth_access_token');
+      }
     } catch {
       // ignore persistence errors
     }
@@ -53,6 +59,7 @@ export function AuthProvider({ children }) {
     setRefreshToken(null);
     try {
       await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
+      await AsyncStorage.removeItem('auth_access_token');
     } catch {
       // ignore
     }

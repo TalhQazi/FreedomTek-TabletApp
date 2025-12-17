@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Linking, Modal, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 
 const COLORS = {
@@ -13,7 +13,7 @@ const COLORS = {
 };
 
 const BASE_URL = 'https://freedom-tech.onrender.com';
-
+                  
 export default function CoursesScreen() {
   const { accessToken, logout } = useAuth();
 
@@ -85,11 +85,17 @@ export default function CoursesScreen() {
   const openCourse = (course) => setSelected(course);
   const closeModal = () => setSelected(null);
 
+  const isEnrolled = (course) => {
+    if (!course?._id) return false;
+    return !!enrollmentStatus[course._id];
+  };
+
   const statusLabel = (course) => {
+    if (!course) return 'Not enrolled';
     const id = course._id;
     const status = enrollmentStatus[id];
-    if (status === 'in_progress') return 'In Progress';
     if (status === 'completed') return 'Completed';
+    if (status === 'in_progress') return 'Enrolled';
     return 'Not enrolled';
   };
 
@@ -120,6 +126,18 @@ export default function CoursesScreen() {
         try {
           const err = await res.json();
           if (err?.error) message = err.error;
+          // If backend says "Already enrolled", treat it as success for UI purposes
+          if (res.status === 400 && err?.error === 'Already enrolled') {
+            setEnrollmentStatus((prev) => ({
+              ...prev,
+              [selected._id]: prev[selected._id] || 'in_progress',
+            }));
+            setInfoMessage('You are already enrolled.');
+            setTimeout(() => {
+              setInfoMessage('');
+            }, 1200);
+            return;
+          }
           if (res.status === 401 && err?.error === 'Invalid token') {
             Alert.alert('Session expired', 'Please log in again to enroll in courses.', [
               { text: 'OK', onPress: () => logout() },
@@ -131,7 +149,7 @@ export default function CoursesScreen() {
         return;
       }
 
-      setInfoMessage('You are now enrolled. This course is marked as In Progress.');
+      setInfoMessage('You are now enrolled. This course is marked as Enrolled.');
       // Refresh enrollments to update status pill
       await loadCoursesAndEnrollments();
       setTimeout(() => {
@@ -143,6 +161,49 @@ export default function CoursesScreen() {
     }
   };
 
+  const openMaterial = async (material) => {
+    if (!material || !material.url) {
+      Alert.alert('Course', 'This file is not available to open.');
+      return;
+    }
+
+    // Ensure we have a full absolute URL. Admin uploads often store
+    // relative paths like "/uploads/xyz.pdf"; prepend BASE_URL so the
+    // device/browser can actually load the file.
+    let fileUrl = material.url;
+    if (fileUrl.startsWith('/')) {
+      fileUrl = `${BASE_URL}${fileUrl}`;
+    }
+
+    try {
+      const supported = await Linking.canOpenURL(fileUrl);
+      if (!supported) {
+        Alert.alert('Course', 'This file type cannot be opened on this device.');
+        return;
+      }
+      await Linking.openURL(fileUrl);
+    } catch (e) {
+      Alert.alert('Course', 'Unable to open this file right now.');
+    }
+  };
+
+  const handlePrimaryAction = async () => {
+    if (!selected) return;
+    const enrolled = isEnrolled(selected);
+
+    if (!enrolled) {
+      await handleStartSelected();
+      return;
+    }
+
+    // Already enrolled: start learning. If there are materials, open the first one.
+    if (selected.materials && selected.materials.length > 0) {
+      await openMaterial(selected.materials[0]);
+    } else {
+      Alert.alert('Course', 'You are enrolled, but no course files have been uploaded yet.');
+    }
+  };
+                                                                                
   const renderItem = ({ item }) => (
     <TouchableOpacity style={styles.card} activeOpacity={0.9} onPress={() => openCourse(item)}>
       <View style={styles.cardHeaderRow}>
@@ -207,24 +268,49 @@ export default function CoursesScreen() {
           <View style={styles.modalCard}>
             <ScrollView contentContainerStyle={{ paddingBottom: 12 }}>
               <Text style={styles.modalTitle}>{selected?.title}</Text>
-              <Text style={styles.modalMeta}>{selected?.level} • {selected?.duration}</Text>
-              <Text style={styles.modalMeta}>Status: {selected ? statusLabel(selected.id) : ''}</Text>
-              <Text style={styles.modalMeta}>Schedule: {selected?.schedule}</Text>
-              <Text style={styles.modalBody}>
-                {selected?.short}
-                {"\n\n"}
-                This is a facility-managed course. Enrollment and completion status will be tracked by staff in
-                the kiosk system. Content may include worksheets, videos or in-person sessions depending on
-                facility rules.
+              <Text style={styles.modalMeta}>
+                {selected?.level || selected?.category || 'Course'}  {displayDuration(selected || {})}
               </Text>
+              <Text style={styles.modalMeta}>Status: {statusLabel(selected)}</Text>
+              <Text style={styles.modalMeta}>{displaySchedule(selected || {})}</Text>
+              <Text style={styles.modalBody}>
+                {selected?.description || 'This is a facility-managed course. Enrollment and completion status will be tracked by staff in the kiosk system. Content may include worksheets, videos or in-person sessions depending on facility rules.'}
+              </Text>
+
+              {Array.isArray(selected?.materials) && selected.materials.length > 0 ? (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={[styles.modalMeta, { marginBottom: 4 }]}>Course files</Text>
+                  {selected.materials.map((m, index) => (
+                    <TouchableOpacity
+                      key={m.url || index}
+                      style={styles.materialRow}
+                      onPress={() => {
+                        if (!isEnrolled(selected)) {
+                          Alert.alert('Enroll required', 'Please enroll in this course before opening the files.');
+                          return;
+                        }
+                        openMaterial(m);
+                      }}
+                    >
+                      <Text style={styles.materialName} numberOfLines={1}>
+                        {m.originalName || `File ${index + 1}`}
+                      </Text>
+                      <Text style={styles.materialType}>{m.type?.toUpperCase?.() || 'FILE'}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+
               {infoMessage ? <Text style={styles.info}>{infoMessage}</Text> : null}
             </ScrollView>
             <View style={styles.modalActions}>
               <TouchableOpacity style={[styles.modalBtn, styles.modalBtnGhost]} onPress={closeModal}>
                 <Text style={styles.modalBtnGhostText}>Close</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalBtn} onPress={handleStartSelected}>
-                <Text style={styles.modalBtnText}>Start Course</Text>
+              <TouchableOpacity style={styles.modalBtn} onPress={handlePrimaryAction}>
+                <Text style={styles.modalBtnText}>
+                  {isEnrolled(selected) ? 'Read course now' : 'Enroll now'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -98,3 +98,4 @@ const styles = StyleSheet.create({
   linkText: { color: '#93c5fd', marginTop: 8, fontWeight: '600' },
   error: { color: '#fca5a5' },
 });
+

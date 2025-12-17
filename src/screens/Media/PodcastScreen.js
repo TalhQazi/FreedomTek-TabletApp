@@ -1,18 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Audio } from 'expo-av';
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import { useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
+    Alert,
     FlatList,
     Modal,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
+    Dimensions,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const Animated = require('react-native').Animated;
 
 const COLORS = {
@@ -48,10 +51,12 @@ export default function PodcastScreen() {
   const [currentPlayingId, setCurrentPlayingId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isModalVisible, setIsModalVisible] = useState(false);
 
   const soundRef = useRef(null);
   const progressAnim = useRef(new Animated.Value(0)).current;
   const loadingTimeoutRef = useRef(null);
+  const playbackIntervalRef = useRef(null);
 
   useEffect(() => {
     loadStorageData();
@@ -62,9 +67,10 @@ export default function PodcastScreen() {
       if (loadingTimeoutRef.current) {
         clearTimeout(loadingTimeoutRef.current);
       }
-      if (soundRef.current) {
-        soundRef.current.unloadAsync();
+      if (playbackIntervalRef.current) {
+        clearInterval(playbackIntervalRef.current);
       }
+      stopCurrentAudio();
     };
   }, []);
 
@@ -88,20 +94,24 @@ export default function PodcastScreen() {
     setError('');
     try {
       const res = await fetch(`${BASE_URL}/podcasts`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: { 
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
       });
+      
       if (!res.ok) {
         let message = 'Failed to load podcasts.';
+        if (res.status === 401) {
+          Alert.alert('Session expired', 'Please log in again to listen to podcasts.', [
+            { text: 'OK', onPress: () => logout() },
+          ]);
+          return;
+        }
         try {
           const err = await res.json();
           if (err?.error) {
             message = err.error;
-            if (res.status === 401 && err.error === 'Invalid token') {
-              Alert.alert('Session expired', 'Please log in again to listen to podcasts.', [
-                { text: 'OK', onPress: () => logout() },
-              ]);
-              return;
-            }
           }
         } catch {}
         setError(message);
@@ -110,15 +120,32 @@ export default function PodcastScreen() {
       }
 
       const data = await res.json();
-      const items = Array.isArray(data.podcasts) ? data.podcasts : [];
-      setPodcasts(items);
+      console.log('Podcasts data:', data);
+      
+      // API response structure might vary - adjust accordingly
+      const items = Array.isArray(data.podcasts) ? data.podcasts : 
+                    Array.isArray(data) ? data : 
+                    data.data || [];
+      
+      // Fix audio URLs and add default duration
+      const formattedItems = items.map(podcast => ({
+        ...podcast,
+        audioUrl: podcast.audioUrl && podcast.audioUrl.startsWith('uploads/') 
+          ? `${BASE_URL}/${podcast.audioUrl}`
+          : podcast.audioUrl,
+        duration: podcast.duration || 300000 // Default 5 minutes if not provided
+      }));
+      
+      setPodcasts(formattedItems);
 
+      // Extract unique categories
       const uniqueCategories = Array.from(
-        new Set(items.map((p) => p.category).filter(Boolean))
+        new Set(formattedItems.map((p) => p.category || 'Uncategorized').filter(Boolean))
       );
       setCategories(['All', ...uniqueCategories]);
-    } catch {
-      setError('Failed to load podcasts.');
+    } catch (err) {
+      console.log('Error loading podcasts:', err);
+      setError('Failed to load podcasts. Please check your connection.');
       setPodcasts([]);
     } finally {
       setLoading(false);
@@ -142,10 +169,12 @@ export default function PodcastScreen() {
     try {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
-        staysActiveInBackground: false,
+        interruptionModeIOS: InterruptionModeIOS.DoNotMix,
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
+        interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
         playThroughEarpieceAndroid: false,
+        staysActiveInBackground: false,
       });
     } catch (error) {
       console.log('Error setting audio mode:', error);
@@ -187,7 +216,7 @@ export default function PodcastScreen() {
       await stopCurrentAudio();
 
       setSelected(episode);
-
+      setIsModalVisible(true);
       setIsLoadingSound(true);
       setIsPlaying(false);
       setPositionMillis(0);
@@ -197,20 +226,34 @@ export default function PodcastScreen() {
       // Set timeout to prevent infinite loading
       loadingTimeoutRef.current = setTimeout(() => {
         setIsLoadingSound(false);
+        Alert.alert('Error', 'Could not load audio. Please check your connection.');
         console.log('Loading timeout reached');
-      }, 5000); // 5 seconds timeout
+      }, 10000); // 10 seconds timeout
+
+      // Normalise audio URL
+      let audioUri = episode.audioUrl;
+      if (!audioUri) {
+        throw new Error('No audio URL provided');
+      }
+      
+      // Fix URL if needed
+      if (audioUri.startsWith('/')) {
+        audioUri = `${BASE_URL}${audioUri}`;
+      } else if (audioUri.startsWith('uploads/')) {
+        audioUri = `${BASE_URL}/${audioUri}`;
+      }
+      
+      console.log('Loading audio from:', audioUri);
 
       // Load new sound with optimized settings
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: episode.audioUrl },
-
+      const { sound, status } = await Audio.Sound.createAsync(
+        { uri: audioUri },
         {
           shouldPlay: false,
           progressUpdateIntervalMillis: 500,
           staysActiveInBackground: false,
           playThroughEarpieceAndroid: false,
-        },
-        onPlaybackStatusUpdate
+        }
       );
 
       // Clear timeout since loading succeeded
@@ -219,34 +262,51 @@ export default function PodcastScreen() {
       }
 
       soundRef.current = sound;
-      markPlayed(episode._id);
+      
+      // Set up playback status update listener
+      sound.setOnPlaybackStatusUpdate(onPlaybackStatusUpdate);
+      
+      // Get initial status
+      const initialStatus = await sound.getStatusAsync();
+      if (initialStatus.isLoaded) {
+        setDurationMillis(initialStatus.durationMillis || 0);
+      }
 
-      // Auto-play after loading
+      markPlayed(episode._id);
+      setIsLoadingSound(false);
+      
+      // Start playing automatically
       await sound.playAsync();
       setIsPlaying(true);
+      
     } catch (error) {
       console.log('Error loading audio:', error);
       // Clear timeout on error too
       if (loadingTimeoutRef.current) {
         clearTimeout(loadingTimeoutRef.current);
       }
-    } finally {
       setIsLoadingSound(false);
+      Alert.alert('Error', `Could not play audio: ${error.message}`);
     }
   };
 
   const onPlaybackStatusUpdate = (status) => {
-    if (!status.isLoaded) return;
+    if (!status.isLoaded) {
+      if (status.error) {
+        console.log('Playback error:', status.error);
+        Alert.alert('Playback Error', 'An error occurred while playing audio.');
+      }
+      return;
+    }
 
+    setPositionMillis(status.positionMillis || 0);
+    setDurationMillis(status.durationMillis || durationMillis);
+    setIsPlaying(status.isPlaying || false);
+    
     if (status.didJustFinish) {
       setIsPlaying(false);
       setPositionMillis(0);
       progressAnim.setValue(0);
-      setCurrentPlayingId(null);
-    } else {
-      setPositionMillis(status.positionMillis || 0);
-      setDurationMillis(status.durationMillis || 0);
-      setIsPlaying(status.isPlaying || false);
     }
   };
 
@@ -256,11 +316,19 @@ export default function PodcastScreen() {
       clearTimeout(loadingTimeoutRef.current);
     }
 
-    // Stop and unload sound
+    // Clear playback interval
+    if (playbackIntervalRef.current) {
+      clearInterval(playbackIntervalRef.current);
+    }
+
+    // Pause and unload sound
     if (soundRef.current) {
       try {
-        await soundRef.current.stopAsync();
-        await soundRef.current.unloadAsync();
+        const status = await soundRef.current.getStatusAsync();
+        if (status.isLoaded) {
+          await soundRef.current.pauseAsync();
+          await soundRef.current.unloadAsync();
+        }
         soundRef.current = null;
       } catch (error) {
         console.log('Error closing player:', error);
@@ -268,6 +336,7 @@ export default function PodcastScreen() {
     }
 
     // Reset states
+    setIsModalVisible(false);
     setSelected(null);
     setPositionMillis(0);
     setDurationMillis(0);
@@ -279,8 +348,11 @@ export default function PodcastScreen() {
   const stopCurrentAudio = async () => {
     if (soundRef.current) {
       try {
-        await soundRef.current.stopAsync();
-        await soundRef.current.unloadAsync();
+        const status = await soundRef.current.getStatusAsync();
+        if (status.isLoaded) {
+          await soundRef.current.stopAsync();
+          await soundRef.current.unloadAsync();
+        }
         soundRef.current = null;
       } catch (error) {
         console.log('Error stopping audio:', error);
@@ -370,12 +442,11 @@ export default function PodcastScreen() {
           isCurrentlyPlaying && styles.playingCard,
         ]}
         onPress={() => openEpisode(item)}
-
         activeOpacity={0.8}
       >
         <View style={styles.cardHeader}>
           <View style={styles.categoryBadge}>
-            <Text style={styles.categoryBadgeText}>{item.category}</Text>
+            <Text style={styles.categoryBadgeText}>{item.category || 'Uncategorized'}</Text>
           </View>
           <View style={styles.badgesRow}>
             {isPlayed && (
@@ -400,19 +471,19 @@ export default function PodcastScreen() {
         </View>
 
         <Text style={styles.cardTitle} numberOfLines={2}>
-          {item.title}
+          {item.title || 'Untitled'}
         </Text>
 
         <Text style={styles.cardDescription} numberOfLines={2}>
-          {item.description}
+          {item.description || 'No description available'}
         </Text>
 
         <View style={styles.cardFooter}>
           <View style={styles.durationBadge}>
             <Ionicons name="time-outline" size={12} color={COLORS.muted} />
             <Text style={styles.durationText}>
-              {typeof item.duration === 'number' && !Number.isNaN(item.duration)
-                ? `${Math.round(item.duration / 60)} min`
+              {item.duration 
+                ? `${Math.round(item.duration / 60000)} min` 
                 : 'Audio'}
             </Text>
           </View>
@@ -420,7 +491,7 @@ export default function PodcastScreen() {
             styles.playButton,
             isCurrentlyPlaying && styles.playingButton
           ]}>
-            {isCurrentlyPlaying ? (
+            {isCurrentlyPlaying && isPlaying ? (
               <>
                 <Ionicons name="pause" size={14} color="#FFFFFF" />
                 <Text style={styles.playingText}>PLAYING</Text>
@@ -445,7 +516,7 @@ export default function PodcastScreen() {
   };
 
   const formatTime = (millis) => {
-    if (!millis) return '0:00';
+    if (!millis || millis < 0) return '0:00';
     const totalSeconds = Math.floor(millis / 1000);
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
@@ -488,13 +559,19 @@ export default function PodcastScreen() {
       {currentPlayingId && (
         <TouchableOpacity
           style={styles.miniPlayer}
-          onPress={() => setSelected(podcasts.find((p) => p._id === currentPlayingId))}
+          onPress={() => {
+            const playingPodcast = podcasts.find((p) => p._id === currentPlayingId);
+            if (playingPodcast) {
+              setSelected(playingPodcast);
+              setIsModalVisible(true);
+            }
+          }}
         >
           <View style={styles.miniPlayerContent}>
             <View style={styles.miniPlayerInfo}>
               <Ionicons name="musical-notes" size={16} color={COLORS.primary} />
               <Text style={styles.miniPlayerTitle} numberOfLines={1}>
-                {podcasts.find((p) => p._id === currentPlayingId)?.title}
+                {podcasts.find((p) => p._id === currentPlayingId)?.title || 'Now Playing'}
               </Text>
             </View>
             <View style={styles.miniPlayerControls}>
@@ -528,6 +605,12 @@ export default function PodcastScreen() {
       ) : error ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 }}>
           <Text style={{ color: COLORS.muted, textAlign: 'center' }}>{error}</Text>
+          <TouchableOpacity 
+            style={styles.retryButton}
+            onPress={loadPodcasts}
+          >
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
         </View>
       ) : filteredPodcasts.length === 0 ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 }}>
@@ -554,7 +637,7 @@ export default function PodcastScreen() {
 
       {/* Player Modal */}
       <Modal
-        visible={!!selected}
+        visible={isModalVisible}
         transparent
         animationType="slide"
         onRequestClose={closePlayer}
@@ -565,18 +648,25 @@ export default function PodcastScreen() {
             {/* Header */}
             <View style={styles.playerHeader}>
               <TouchableOpacity onPress={closePlayer} style={styles.closeButton}>
-                <Ionicons name="chevron-down" size={24} color={COLORS.text} />
+                <Ionicons name="chevron-down" size={28} color={COLORS.text} />
               </TouchableOpacity>
               <View style={styles.playerHeaderCenter}>
                 <Text style={styles.playerHeaderTitle} numberOfLines={1}>
                   {selected?.title || 'Now Playing'}
                 </Text>
                 <Text style={styles.playerHeaderSubtitle}>
-                  {isPlaying ? 'Playing' : 'Paused'}
+                  {isPlaying ? 'Playing' : 'Paused'} • {selected?.category || 'Uncategorized'}
                 </Text>
               </View>
-              <TouchableOpacity onPress={stopCurrentAudio} style={styles.stopButton}>
-                <Ionicons name="close" size={20} color={COLORS.text} />
+              <TouchableOpacity 
+                onPress={() => selected && toggleFavorite(selected._id)}
+                style={styles.favoriteModalButton}
+              >
+                <Ionicons 
+                  name={favorites.includes(selected?._id) ? "heart" : "heart-outline"} 
+                  size={24} 
+                  color={favorites.includes(selected?._id) ? COLORS.primary : COLORS.text} 
+                />
               </TouchableOpacity>
             </View>
 
@@ -597,22 +687,24 @@ export default function PodcastScreen() {
                 <>
                   <View style={styles.artworkContainer}>
                     <View style={styles.artwork}>
-                      <Ionicons name="musical-notes" size={48} color={COLORS.primary} />
+                      <Ionicons name="musical-notes" size={60} color={COLORS.primary} />
                     </View>
                   </View>
 
                   <View style={styles.trackInfo}>
                     <Text style={styles.playerTitle} numberOfLines={2}>
-                      {selected?.title}
+                      {selected?.title || 'Untitled'}
                     </Text>
-                    <Text style={styles.playerCategory}>{selected?.category}</Text>
+                    <Text style={styles.playerDescription} numberOfLines={3}>
+                      {selected?.description || 'No description available'}
+                    </Text>
                   </View>
 
                   {/* Progress Bar */}
                   <View style={styles.progressContainer}>
                     <View style={styles.timeLabels}>
                       <Text style={styles.timeText}>{formatTime(positionMillis)}</Text>
-                      <Text style={styles.timeText}>-{formatTime(durationMillis - positionMillis)}</Text>
+                      <Text style={styles.timeText}>{formatTime(durationMillis)}</Text>
                     </View>
                     
                     <TouchableOpacity 
@@ -633,6 +725,12 @@ export default function PodcastScreen() {
                           ]} 
                         />
                       </View>
+                      <Animated.View 
+                        style={[
+                          styles.progressThumb,
+                          { left: progressWidth }
+                        ]}
+                      />
                     </TouchableOpacity>
                   </View>
 
@@ -651,7 +749,7 @@ export default function PodcastScreen() {
                     >
                       <Ionicons 
                         name={isPlaying ? "pause" : "play"} 
-                        size={32} 
+                        size={36} 
                         color="#FFFFFF" 
                       />
                     </TouchableOpacity>
@@ -664,17 +762,22 @@ export default function PodcastScreen() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* Secondary Actions */}
-                  <View style={styles.secondaryActions}>
+                  {/* Additional Controls */}
+                  <View style={styles.additionalControls}>
                     <TouchableOpacity 
-                      style={styles.actionButton}
-                      onPress={() => selected && toggleFavorite(selected._id)}
+                      style={styles.additionalButton}
+                      onPress={() => selected && markPlayed(selected._id)}
                     >
-                      <Ionicons 
-                        name={favorites.includes(selected?._id) ? "heart" : "heart-outline"} 
-                        size={24} 
-                        color={favorites.includes(selected?._id) ? COLORS.primary : COLORS.text} 
-                      />
+                      <Ionicons name="checkmark-done" size={20} color={played.includes(selected?._id) ? COLORS.success : COLORS.text} />
+                      <Text style={styles.additionalButtonText}>Mark Played</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity 
+                      style={styles.additionalButton}
+                      onPress={stopCurrentAudio}
+                    >
+                      <Ionicons name="stop" size={20} color={COLORS.text} />
+                      <Text style={styles.additionalButtonText}>Stop</Text>
                     </TouchableOpacity>
                   </View>
                 </>
@@ -721,6 +824,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: COLORS.muted,
     fontWeight: '500',
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    backgroundColor: COLORS.primary,
+    borderRadius: 20,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   categoriesSection: {
     paddingVertical: 16,
@@ -791,13 +906,14 @@ const styles = StyleSheet.create({
     left: 0,
     height: 2,
     backgroundColor: COLORS.primary,
+    borderRadius: 1,
   },
   listContent: {
     padding: 20,
     paddingBottom: 30,
   },
   listContentWithMiniPlayer: {
-    paddingBottom: 80, // Extra space for mini player
+    paddingBottom: 80,
   },
   columnWrapper: {
     gap: 12,
@@ -812,6 +928,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     minHeight: 180,
     position: 'relative',
+    maxWidth: (SCREEN_WIDTH - 52) / 2,
   },
   playingCard: {
     borderColor: COLORS.primary,
@@ -828,6 +945,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
+    maxWidth: '70%',
   },
   categoryBadgeText: {
     fontSize: 10,
@@ -927,35 +1045,47 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   playerCard: {
-    width: '92%',
-    backgroundColor: COLORS.card,
-    borderRadius: 24,
-    maxHeight: '90%',
-    overflow: 'hidden',
+    width: '100%',
+    height: '100%',
+    backgroundColor: COLORS.background,
+    paddingTop: 60,
   },
   playerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 20,
-    paddingBottom: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  closeButton: {
-    padding: 4,
-  },
-  stopButton: {
-    padding: 4,
+  playerHeaderCenter: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 20,
   },
   playerHeaderTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     color: COLORS.text,
+    textAlign: 'center',
+    marginBottom: 2,
+  },
+  playerHeaderSubtitle: {
+    fontSize: 14,
+    color: COLORS.muted,
+    textAlign: 'center',
+  },
+  closeButton: {
+    padding: 8,
+  },
+  favoriteModalButton: {
+    padding: 8,
   },
   playerContent: {
-    padding: 20,
     flex: 1,
+    padding: 20,
+    paddingTop: 40,
   },
   loadingContainer: {
     flex: 1,
@@ -984,13 +1114,13 @@ const styles = StyleSheet.create({
   },
   artworkContainer: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 32,
   },
   artwork: {
-    width: 120,
-    height: 120,
-    borderRadius: 20,
-    backgroundColor: 'rgba(42, 43, 49, 0.5)',
+    width: 180,
+    height: 180,
+    borderRadius: 24,
+    backgroundColor: COLORS.card,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
@@ -998,15 +1128,21 @@ const styles = StyleSheet.create({
   },
   trackInfo: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 40,
   },
   playerTitle: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: '700',
     color: COLORS.text,
     textAlign: 'center',
     marginBottom: 8,
-    lineHeight: 24,
+    lineHeight: 28,
+  },
+  playerDescription: {
+    fontSize: 16,
+    color: COLORS.muted,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   playerCategory: {
     fontSize: 14,
@@ -1014,65 +1150,84 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   progressContainer: {
-    marginBottom: 32,
+    marginBottom: 40,
   },
   timeLabels: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   timeText: {
-    fontSize: 12,
+    fontSize: 14,
     color: COLORS.muted,
     fontWeight: '500',
   },
   progressBar: {
     height: 40,
     justifyContent: 'center',
+    position: 'relative',
   },
   progressBackground: {
-    height: 4,
+    height: 6,
     backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 2,
+    borderRadius: 3,
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
     backgroundColor: COLORS.primary,
-    borderRadius: 2,
+    borderRadius: 3,
+  },
+  progressThumb: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: COLORS.primary,
+    top: '50%',
+    marginTop: -10,
+    marginLeft: -10,
   },
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 32,
-    marginBottom: 24,
+    gap: 40,
+    marginBottom: 40,
   },
   controlButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: COLORS.card,
   },
   modalPlayButton: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: COLORS.primary,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 10,
   },
-  secondaryActions: {
+  additionalControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingHorizontal: 20,
+  },
+  additionalButton: {
     alignItems: 'center',
-  },
-  actionButton: {
     padding: 12,
+  },
+  additionalButtonText: {
+    fontSize: 12,
+    color: COLORS.muted,
+    marginTop: 4,
   },
 });

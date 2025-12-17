@@ -114,18 +114,18 @@ export default function MainTabs() {
         tabBarIcon: ({ color, size }) => {
           const iconMap = {
             Home: 'home',
-            Messages: 'chatbubbles',
             Time: 'time',
             Note: 'document-text',
           };
-          return <Ionicons name={iconMap[route.name]} size={size} color={color} />;
+          const iconName = iconMap[route.name];
+          if (!iconName) return null;
+          return <Ionicons name={iconName} size={size} color={color} />;
         },
         tabBarHideOnKeyboard: true,
       })}
       lazy={false}
     >
       <Tab.Screen name="Home" component={HomeStack} />
-      <Tab.Screen name="Messages" component={MessagesStack} />
       <Tab.Screen name="Time" component={TimeScreen} />
       <Tab.Screen name="Note" component={NotesScreen} />
     </Tab.Navigator>
