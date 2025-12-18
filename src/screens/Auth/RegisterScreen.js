@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 
 const COLORS = {
@@ -24,6 +24,7 @@ export default function RegisterScreen({ navigation }) {
   const [tabletId, setTabletId] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   const generateInmateId = () => {
     const random = Math.floor(1 + Math.random() * 999);
@@ -43,22 +44,41 @@ export default function RegisterScreen({ navigation }) {
   const onRegister = async () => {
     setError('');
     setSuccess('');
-    if (!name || !password || !confirm || !inmateId || !tabletId) {
-      setError('Please fill all required fields.');
+    const trimmedName = name.trim();
+    const trimmedFacility = facility.trim();
+    const trimmedPassword = password.trim();
+    const trimmedConfirm = confirm.trim();
+
+    if (!trimmedName || !trimmedPassword || !trimmedConfirm || !inmateId || !tabletId) {
+      const message = 'Please fill all required fields.';
+      setError(message);
+      Alert.alert('Missing information', message);
       return;
     }
-    if (password !== confirm) {
-      setError('Passwords do not match.');
+
+    if (trimmedPassword.length < 4) {
+      const message = 'Password must be at least 4 characters.';
+      setError(message);
+      Alert.alert('Weak password', message);
       return;
     }
+
+    if (trimmedPassword !== trimmedConfirm) {
+      const message = 'Passwords do not match.';
+      setError(message);
+      Alert.alert('Password mismatch', message);
+      return;
+    }
+
+    setIsLoading(true);
     try {
       const res = await fetch(`${BASE_URL}/auth/inmate-signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name,
-          password,
-          facility,
+          name: trimmedName,
+          password: trimmedPassword,
+          facility: trimmedFacility,
           inmateId,
           tabletId,
         }),
@@ -69,19 +89,33 @@ export default function RegisterScreen({ navigation }) {
         try {
           const err = await res.json();
           if (err?.error) message = err.error;
+          if (err?.message) message = err.message;
         } catch {
           // ignore parse errors
         }
         setError(message);
+        Alert.alert('Registration failed', message);
         return;
       }
 
-      setSuccess('Account created. You can login now.');
-      Alert.alert('Registration Successful', 'Your account is created. Please login to continue.', [
-        { text: 'OK', onPress: () => navigation.navigate('Login') },
-      ]);
+      setSuccess('Account created successfully!');
+      Alert.alert(
+        'Registration successful',
+        'Your account has been created. You can now log in.',
+        [
+          {
+            text: 'Go to Login',
+            onPress: () => navigation.navigate('Login'),
+          },
+        ],
+      );
     } catch (err) {
-      setError('Registration failed.');
+      console.log('Registration error:', err);
+      const message = 'Network error. Please check your connection.';
+      setError(message);
+      Alert.alert('Registration failed', message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -140,8 +174,17 @@ export default function RegisterScreen({ navigation }) {
           {success ? <Text style={styles.success}>{success}</Text> : null}
         </View>
 
-        <TouchableOpacity style={styles.button} activeOpacity={0.85} onPress={onRegister}>
-          <Text style={styles.buttonText}>Register</Text>
+        <TouchableOpacity
+          style={[styles.button, (isLoading || !name.trim() || !password.trim() || !confirm.trim()) && styles.buttonDisabled]}
+          activeOpacity={0.85}
+          onPress={onRegister}
+          disabled={isLoading || !name.trim() || !password.trim() || !confirm.trim()}
+        >
+          {isLoading ? (
+            <ActivityIndicator size="small" color={COLORS.primaryText} />
+          ) : (
+            <Text style={styles.buttonText}>Register</Text>
+          )}
         </TouchableOpacity>
 
         <Text style={styles.linkText} onPress={() => navigation.navigate('Login')}>

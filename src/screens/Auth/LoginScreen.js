@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View, Alert, ActivityIndicator } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 
 const COLORS = {
@@ -17,6 +17,7 @@ export default function LoginScreen({ navigation }) {
   const [inmateId, setInmateId] = useState('INM-');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleInmateIdChange = (text) => {
     // Always enforce the 'INM-' prefix and allow up to 3 digits after it
@@ -39,14 +40,48 @@ export default function LoginScreen({ navigation }) {
 
   const onLogin = async () => {
     setError('');
+
+    const trimmedId = inmateId.trim();
+    const trimmedPassword = password.trim();
+
+    if (!trimmedId || !trimmedPassword) {
+      const message = 'Please enter inmate ID and password.';
+      setError(message);
+      Alert.alert('Missing information', message);
+      return;
+    }
+
+    if (!trimmedId.startsWith('INM-') || trimmedId.length !== 7) {
+      const message = 'Invalid Inmate ID format. Use format: INM-123';
+      setError(message);
+      Alert.alert('Invalid Inmate ID', message);
+      return;
+    }
+
+    setIsLoading(true);
+
     try {
-      if (!inmateId || !password) {
-        setError('Please enter inmate ID and password.');
-        return;
-      }
-      await login(inmateId, password);
+      await login(trimmedId, trimmedPassword);
+      Alert.alert('Login successful', 'You have been logged in.');
     } catch (e) {
-      setError(e.message || 'Login failed.');
+      console.log('Login error:', e);
+
+      let errorTitle = 'Login failed';
+      let errorMessage = e?.message || 'Unable to login. Please check your credentials.';
+
+      const msgLower = (errorMessage || '').toLowerCase();
+      if (msgLower.includes('network')) {
+        errorTitle = 'Network error';
+        errorMessage = 'Please check your internet connection and try again.';
+      } else if (msgLower.includes('401') || msgLower.includes('invalid')) {
+        errorTitle = 'Invalid credentials';
+        errorMessage = 'Invalid Inmate ID or password. Please try again.';
+      }
+
+      setError(errorMessage);
+      Alert.alert(errorTitle, errorMessage);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -75,8 +110,17 @@ export default function LoginScreen({ navigation }) {
           {error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
 
-        <TouchableOpacity style={styles.button} activeOpacity={0.85} onPress={onLogin}>
-          <Text style={styles.buttonText}>Login</Text>
+        <TouchableOpacity
+          style={[styles.button, (isLoading || !inmateId.trim() || !password.trim()) && styles.buttonDisabled]}
+          activeOpacity={0.85}
+          onPress={onLogin}
+          disabled={isLoading || !inmateId.trim() || !password.trim()}
+        >
+          {isLoading ? (
+            <ActivityIndicator size="small" color={COLORS.primaryText} />
+          ) : (
+            <Text style={styles.buttonText}>Login</Text>
+          )}
         </TouchableOpacity>
 
         <Text style={styles.linkText} onPress={() => navigation.navigate('Register')}>

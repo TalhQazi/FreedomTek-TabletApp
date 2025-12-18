@@ -2,16 +2,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 
 import {
-    Alert,
-    Dimensions,
-    FlatList,
-    Modal,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  Dimensions,
+  FlatList,
+  Modal,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+  ActivityIndicator,
 } from 'react-native';
+
 import { useAuth } from '../../context/AuthContext';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -28,222 +30,12 @@ const COLORS = {
   medical: '#FBBF24', // yellow
   meal: '#F97316', // orange
   recreation: '#10B981', // green
-  admin: '#EF4444', // red
+  admin: '#EF4444', // red,
 };
 
 const BASE_URL = 'https://freedom-tech.onrender.com';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-
-// Local mock schedule data (Phase-1 only)
-const SCHEDULE = {
-  Monday: [
-    {
-      id: 'm1',
-      time: '07:30',
-      title: 'Morning Chow',
-      category: 'Meal',
-      description: 'Breakfast service in main chow hall.',
-      location: 'Chow Hall A',
-    },
-    {
-      id: 'm2',
-      time: '09:00',
-      title: 'Education Class: Math Skills',
-      category: 'Program',
-      description: 'Group session focused on basic numeracy and applied math.',
-      location: 'Education Room 2',
-    },
-    {
-      id: 'm3',
-      time: '11:30',
-      title: 'Midday Chow',
-      category: 'Meal',
-      description: 'Lunch service in chow hall.',
-      location: 'Chow Hall A',
-    },
-    {
-      id: 'm4',
-      time: '13:00',
-      title: 'Case Manager Check-in',
-      category: 'Medical / Appointment',
-      description: 'Scheduled one-on-one meeting with your case manager.',
-      location: 'Case Management Office',
-    },
-    {
-      id: 'm5',
-      time: '15:00',
-      title: 'Yard / Recreation',
-      category: 'Recreation',
-      description: 'Outdoor yard time. Follow posted rules and staff instructions.',
-      location: 'Yard B',
-    },
-    {
-      id: 'm6',
-      time: '18:00',
-      title: 'Evening Chow',
-      category: 'Meal',
-      description: 'Dinner service in chow hall.',
-      location: 'Chow Hall A',
-    },
-  ],
-  Tuesday: [
-    {
-      id: 't1',
-      time: '08:00',
-      title: 'Morning Chow',
-      category: 'Meal',
-      description: 'Breakfast service in main chow hall.',
-      location: 'Chow Hall A',
-    },
-    {
-      id: 't2',
-      time: '09:30',
-      title: 'Vocational Program: Workshop',
-      category: 'Program',
-      description: 'Hands-on skills development in facility workshop.',
-      location: 'Workshop 1',
-    },
-    {
-      id: 't3',
-      time: '11:30',
-      title: 'Midday Chow',
-      category: 'Meal',
-      description: 'Lunch service in chow hall.',
-      location: 'Chow Hall A',
-    },
-    {
-      id: 't4',
-      time: '14:00',
-      title: 'Medical Appointment',
-      category: 'Medical / Appointment',
-      description: 'Routine medical check with facility clinic staff.',
-      location: 'Clinic 1',
-    },
-    {
-      id: 't5',
-      time: '16:00',
-      title: 'Facility Town Hall',
-      category: 'Facility Admin',
-      description: 'Information session led by facility administration.',
-      location: 'Multi-purpose Room',
-    },
-  ],
-  Wednesday: [
-    {
-      id: 'w1',
-      time: '07:30',
-      title: 'Morning Chow',
-      category: 'Meal',
-      description: 'Breakfast service in main chow hall.',
-      location: 'Chow Hall A',
-    },
-    {
-      id: 'w2',
-      time: '10:00',
-      title: 'Library Time',
-      category: 'Program',
-      description: 'Scheduled access to facility library resources.',
-      location: 'Library',
-    },
-    {
-      id: 'w3',
-      time: '13:30',
-      title: 'Work Assignment: Unit Cleaning',
-      category: 'Work',
-      description: 'Assigned cleaning duties in housing unit common areas.',
-      location: 'Housing Unit B',
-    },
-    {
-      id: 'w4',
-      time: '17:30',
-      title: 'Evening Chow',
-      category: 'Meal',
-      description: 'Dinner service in chow hall.',
-      location: 'Chow Hall A',
-    },
-  ],
-  Thursday: [
-    {
-      id: 'th1',
-      time: '09:00',
-      title: 'Education Class: Reading & Writing',
-      category: 'Program',
-      description: 'Literacy-focused class to improve reading and writing skills.',
-      location: 'Education Room 1',
-    },
-    {
-      id: 'th2',
-      time: '15:00',
-      title: 'Yard / Recreation',
-      category: 'Recreation',
-      description: 'Outdoor yard time. Follow posted rules and staff instructions.',
-      location: 'Yard A',
-    },
-  ],
-  Friday: [
-    {
-      id: 'f1',
-      time: '07:30',
-      title: 'Morning Chow',
-      category: 'Meal',
-      description: 'Breakfast service in main chow hall.',
-      location: 'Chow Hall A',
-    },
-    {
-      id: 'f2',
-      time: '10:30',
-      title: 'Program: Life Skills Workshop',
-      category: 'Program',
-      description: 'Group program focused on communication and decision-making.',
-      location: 'Program Room 3',
-    },
-    {
-      id: 'f3',
-      time: '13:00',
-      title: 'Case Manager Follow-up',
-      category: 'Medical / Appointment',
-      description: 'Follow-up appointment with case manager.',
-      location: 'Case Management Office',
-    },
-  ],
-  Saturday: [
-    {
-      id: 's1',
-      time: '09:30',
-      title: 'Yard / Recreation (Extended)',
-      category: 'Recreation',
-      description: 'Weekend extended recreation period in the yard.',
-      location: 'Yard C',
-    },
-    {
-      id: 's2',
-      time: '18:00',
-      title: 'Evening Chow',
-      category: 'Meal',
-      description: 'Dinner service in chow hall.',
-      location: 'Chow Hall A',
-    },
-  ],
-  Sunday: [
-    {
-      id: 'su1',
-      time: '10:00',
-      title: 'Religious Services',
-      category: 'Program',
-      description: 'Optional religious service in chapel as per facility rules.',
-      location: 'Chapel',
-    },
-    {
-      id: 'su2',
-      time: '14:00',
-      title: 'Family Video Call (If Scheduled)',
-      category: 'Medical / Appointment',
-      description: 'Pre-approved video call session with family.',
-      location: 'Communication Room',
-    },
-  ],
-};
 
 function getCategoryColor(category) {
   switch (category) {
@@ -274,6 +66,9 @@ export default function ScheduleScreen() {
   const [selectedDay, setSelectedDay] = useState('Monday');
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [categoryColors, setCategoryColors] = useState({});
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!accessToken) return;
@@ -307,6 +102,46 @@ export default function ScheduleScreen() {
         // ignore schedule category load errors; fall back to static colors
       }
     })();
+
+    (async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const res = await fetch(`${BASE_URL}/schedule/events`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        if (!res.ok) {
+          if (res.status === 401) {
+            Alert.alert('Session expired', 'Please log in again to view your schedule.', [
+              { text: 'OK', onPress: () => logout() },
+            ]);
+          } else {
+            let message = 'Failed to load schedule.';
+            try {
+              const err = await res.json();
+              if (err?.error) message = err.error;
+            } catch {
+              // ignore parse errors
+            }
+            setError(message);
+          }
+          return;
+        }
+
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setEvents(data);
+        } else {
+          setEvents([]);
+        }
+      } catch {
+        setError('Failed to load schedule. Please check your connection.');
+        setEvents([]);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [accessToken]);
 
   const getColorForCategory = (category) => {
@@ -333,17 +168,78 @@ export default function ScheduleScreen() {
           <Text style={styles.subtitle}>View your daily facility schedule</Text>
         </View>
 
-        {/* Categories List (from backend) */}
+        {/* Schedule Events List */}
         <View style={styles.listContainer}>
-          {Object.keys(categoryColors).length === 0 ? (
+          {loading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator size={isTablet ? 'large' : 'small'} color={COLORS.program} />
+              <Text style={styles.emptyTitle}>Loading schedule…</Text>
+            </View>
+          ) : error ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="warning-outline" size={isTablet ? 64 : 48} color={COLORS.admin} />
+              <Text style={styles.emptyTitle}>Unable to load schedule</Text>
+              <Text style={styles.emptyText}>{error}</Text>
+            </View>
+          ) : events.length > 0 ? (
+            <FlatList
+              data={events}
+              keyExtractor={(item) => item._id || item.id}
+              renderItem={({ item }) => {
+                const timeLabel = item.startTime && item.endTime
+                  ? `${item.startTime} - ${item.endTime}`
+                  : item.startTime || '';
+
+                const mappedEvent = {
+                  id: item._id || item.id,
+                  time: timeLabel,
+                  title: item.title,
+                  category: 'Schedule',
+                  description: item.description,
+                  location: item.location,
+                };
+
+                const color = COLORS.program;
+
+                return (
+                  <TouchableOpacity
+                    style={styles.eventCard}
+                    activeOpacity={0.8}
+                    onPress={() => handleOpenEvent(mappedEvent)}
+                  >
+                    <View style={[styles.eventCategoryBar, { backgroundColor: color }]} />
+                    <View style={styles.eventContent}>
+                      <View style={styles.eventHeaderRow}>
+                        <Text style={styles.eventTitle}>{item.title}</Text>
+                      </View>
+                      {timeLabel ? (
+                        <Text style={styles.eventTime}>{timeLabel}</Text>
+                      ) : null}
+                      {item.location ? (
+                        <Text style={styles.eventLocation}>{item.location}</Text>
+                      ) : null}
+                      {item.description ? (
+                        <Text style={styles.eventDescription} numberOfLines={2}>
+                          {item.description}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
+              contentContainerStyle={styles.eventsContent}
+              showsVerticalScrollIndicator={false}
+            />
+          ) : Object.keys(categoryColors).length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="calendar-outline" size={isTablet ? 64 : 48} color={COLORS.muted} />
-              <Text style={styles.emptyTitle}>No schedule categories</Text>
+              <Text style={styles.emptyTitle}>No schedule available</Text>
               <Text style={styles.emptyText}>
-                Categories will appear here when configured by facility staff.
+                When facility staff publish a schedule, it will appear here.
               </Text>
             </View>
           ) : (
+            // Fallback: show categories when no events exist yet
             <FlatList
               data={Object.keys(categoryColors)}
               keyExtractor={(item) => item}
@@ -355,7 +251,7 @@ export default function ScheduleScreen() {
                     <View style={styles.eventContent}>
                       <View style={styles.eventHeaderRow}>
                         <Text style={styles.eventTitle}>{item}</Text>
-                        <View style={[styles.categoryPill, { borderColor: color }]}> 
+                        <View style={[styles.categoryPill, { borderColor: color }]} > 
                           <Text style={[styles.categoryPillText, { color }]} numberOfLines={1}>
                             {item}
                           </Text>

@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
+
 import {
     ActivityIndicator,
     Alert,
@@ -14,6 +15,8 @@ import {
     View
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
+import { usePlan } from '../../context/PlanContext';
+import { getInmateWallet } from '../../api/walletApi';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const IS_TABLET = SCREEN_WIDTH >= 768;
@@ -51,6 +54,7 @@ const getCardWidth = () => {
 
 export default function CommissaryScreen() {
   const { accessToken, logout } = useAuth();
+  const { setBalance } = usePlan();
 
   const [categories, setCategories] = useState([{ id: 'all', name: 'All Items' }]);
   const [activeCategory, setActiveCategory] = useState('all');
@@ -59,6 +63,7 @@ export default function CommissaryScreen() {
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [cartModalVisible, setCartModalVisible] = useState(false);
 
   const numColumns = getNumColumns();
   const cardWidth = getCardWidth();
@@ -192,11 +197,7 @@ export default function CommissaryScreen() {
     }
   };
 
-  const handleCartPress = async () => {
-    if (!cartItems.length) {
-      Alert.alert('Cart is empty', 'Add items to your cart before checkout.');
-      return;
-    }
+  const performCheckout = async () => {
     try {
       const res = await fetch(`${BASE_URL}/commissary/checkout`, {
         method: 'POST',
@@ -215,17 +216,43 @@ export default function CommissaryScreen() {
         try {
           const err = await res.json();
           if (err?.error) message = err.error;
+          if (typeof message === 'string' && message.toLowerCase().includes('insufficient wallet balance')) {
+            message = 'Insufficient wallet balance. Please recharge your wallet.';
+          }
         } catch {}
         if (handleAuthError(res, 'Please log in again to checkout.')) return;
         Alert.alert('Error', message);
         return;
       }
       await res.json();
+
+      // Clear local cart state and close modal
       setCartItems([]);
-      Alert.alert('Order placed', 'Your commissary order has been submitted.');
+      setCartModalVisible(false);
+
+      // Refresh wallet balance so Balance Info and dashboard show updated funds
+      try {
+        const wallet = await getInmateWallet();
+        if (wallet && typeof wallet.balance === 'number') {
+          setBalance(wallet.balance);
+        }
+      } catch (err) {
+        // If wallet refresh fails, just log; user can still refresh from Balance Info screen
+        console.log('[Commissary] Failed to refresh wallet after checkout', err);
+      }
+
+      Alert.alert('Order placed', 'Your commissary order has been submitted and your wallet has been updated.');
     } catch {
       Alert.alert('Error', 'Checkout failed.');
     }
+  };
+
+  const handleCartPress = () => {
+    if (!cartItems.length) {
+      Alert.alert('Cart is empty', 'Add items to your cart before checkout.');
+      return;
+    }
+    setCartModalVisible(true);
   };
 
   const itemsForCategory = useMemo(
@@ -301,6 +328,11 @@ export default function CommissaryScreen() {
   );
 
   const cartCount = cartItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+
+  const cartTotal = cartItems.reduce((sum, item) => {
+    const price = item.itemId?.price || 0;
+    return sum + price * (item.quantity || 0);
+  }, 0);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -456,6 +488,63 @@ export default function CommissaryScreen() {
                   ]}>
                     {selectedItem?.available ? 'Add to Cart' : 'Out of Stock'}
                   </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Cart Summary Modal */}
+        <Modal
+          visible={cartModalVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setCartModalVisible(false)}
+          statusBarTranslucent
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.modalCard, IS_TABLET && styles.modalCardTablet]}>
+              <View style={styles.modalHeader}>
+                <View style={styles.modalHeaderLeft}>
+                  <Text style={styles.modalTitle}>Your Cart</Text>
+                  <Text style={styles.modalCategory}>{cartCount} item(s)</Text>
+                </View>
+                <TouchableOpacity onPress={() => setCartModalVisible(false)} style={styles.closeButton}>
+                  <Ionicons name="close" size={24} color={COLORS.text} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
+                {cartItems.map((ci) => {
+                  const price = ci.itemId?.price || 0;
+                  const name = ci.itemId?.name || 'Item';
+                  const qty = ci.quantity || 0;
+                  const subtotal = price * qty;
+                  return (
+                    <View key={ci._id} style={styles.cartRow}>
+                      <View style={styles.cartRowLeft}>
+                        <Text style={styles.cartItemName} numberOfLines={1}>{name}</Text>
+                        <Text style={styles.cartItemMeta}>Qty {qty}  ${price.toFixed(2)} each</Text>
+                      </View>
+                      <Text style={styles.cartItemSubtotal}>${subtotal.toFixed(2)}</Text>
+                    </View>
+                  );
+                })}
+
+                <View style={styles.cartTotalRow}>
+                  <Text style={styles.cartTotalLabel}>Total</Text>
+                  <Text style={styles.cartTotalValue}>${cartTotal.toFixed(2)}</Text>
+                </View>
+              </ScrollView>
+
+              <View style={styles.modalFooter}>
+                <TouchableOpacity
+                  style={styles.addToCartButton}
+                  activeOpacity={0.85}
+                  onPress={performCheckout}
+                >
+                  <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
+                  <Text style={styles.addToCartText}>Confirm Purchase</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -848,5 +937,50 @@ const styles = StyleSheet.create({
   },
   addToCartTextDisabled: {
     color: COLORS.muted,
+  },
+  cartRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: IS_TABLET ? 28 : 24,
+    paddingVertical: IS_TABLET ? 16 : 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  cartRowLeft: {
+    flex: 1,
+    marginRight: 12,
+  },
+  cartItemName: {
+    fontSize: IS_TABLET ? 16 : 14,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginBottom: 4,
+  },
+  cartItemMeta: {
+    fontSize: IS_TABLET ? 14 : 12,
+    color: COLORS.muted,
+  },
+  cartItemSubtotal: {
+    fontSize: IS_TABLET ? 16 : 14,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  cartTotalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: IS_TABLET ? 28 : 24,
+    paddingVertical: IS_TABLET ? 18 : 14,
+  },
+  cartTotalLabel: {
+    fontSize: IS_TABLET ? 18 : 16,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  cartTotalValue: {
+    fontSize: IS_TABLET ? 18 : 16,
+    fontWeight: '700',
+    color: COLORS.price,
   },
 });

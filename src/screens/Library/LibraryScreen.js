@@ -1,6 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, FlatList, Linking, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Linking, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
+import * as FileSystem from 'expo-file-system/legacy';
+
 import { useAuth } from '../../context/AuthContext';
 
 const COLORS = {
@@ -27,7 +30,8 @@ export default function LibraryScreen() {
   const [books, setBooks] = useState([]);
   const [activeCategory, setActiveCategory] = useState('all');
   const [selectedBook, setSelectedBook] = useState(null);
-  const [readerVisible, setReaderVisible] = useState(false);
+  const [downloadedUri, setDownloadedUri] = useState(null);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -62,6 +66,18 @@ export default function LibraryScreen() {
 
   const mapBookFromApi = (book) => {
     const baseColor = '#6366F1';
+
+    const resolveUrl = (value) => {
+      if (!value) return null;
+      if (value.startsWith('http://') || value.startsWith('https://')) {
+        return value;
+      }
+      const path = value.startsWith('/') ? value : `/${value}`;
+      return `${BASE_URL}${path}`;
+    };
+
+    const fileUrl = resolveUrl(book.fileUrl);
+
     return {
       id: book._id,
       categoryId: book.categoryId?._id || book.categoryId,
@@ -71,10 +87,10 @@ export default function LibraryScreen() {
       description: book.description || 'No description available.',
       pages: 0,
       level: book.available ? 'Available' : 'Unavailable',
-      url: null,
+      url: fileUrl,
       coverColor: baseColor,
       rating: 4.5,
-      isOnline: false,
+      isOnline: !!fileUrl,
     };
   };
 
@@ -132,31 +148,43 @@ export default function LibraryScreen() {
 
   const openBook = (book) => {
     setSelectedBook(book);
+    setDownloadedUri(null);
   };
 
   const closeBookModal = () => {
     setSelectedBook(null);
   };
 
-  const openReader = async (book) => {
-    if (book.isOnline && book.url) {
-      try {
-        const canOpen = await Linking.canOpenURL(book.url);
-        if (canOpen) {
-          await Linking.openURL(book.url);
-        } else {
-          Alert.alert('Error', 'Cannot open this book link');
-        }
-      } catch (error) {
-        Alert.alert('Error', 'Failed to open book');
-      }
-    } else {
-      setReaderVisible(true);
+  const handleDownload = async () => {
+    if (!selectedBook?.url) {
+      Alert.alert('Not available', 'This book file is not available yet.');
+      return;
     }
-  };
+    try {
+      const url = selectedBook.url;
+      
+      // On web, let the browser handle the download/open
+      if (Platform.OS === 'web') {
+        const canOpen = await Linking.canOpenURL(url);
+        if (!canOpen) {
+          Alert.alert('Error', 'Cannot open this book link in the browser.');
+          return;
+        }
+        await Linking.openURL(url);
+        return;
+      }
 
-  const closeReader = () => {
-    setReaderVisible(false);
+      // On native platforms, download to app storage for offline use
+      const parts = url.split('.');
+      const ext = parts.length > 1 ? parts[parts.length - 1].split('?')[0] : 'pdf';
+      const fileUri = `${FileSystem.documentDirectory}book_${selectedBook.id}.${ext}`;
+
+      const result = await FileSystem.downloadAsync(url, fileUri);
+      setDownloadedUri(result.uri);
+      Alert.alert('Downloaded', 'This book is now available for offline reading.');
+    } catch (e) {
+      Alert.alert('Error', 'Failed to download book for offline reading.');
+    }
   };
 
   const getCategoryBooksCount = (categoryId) => {
@@ -370,79 +398,17 @@ export default function LibraryScreen() {
 
             <View style={styles.modalFooter}>
               <TouchableOpacity 
-                style={[
-                  styles.readButton,
-                  selectedBook?.isOnline && styles.readButtonOnline
-                ]} 
-                onPress={() => openReader(selectedBook)}
+                style={styles.readButton}
+                onPress={handleDownload}
               >
                 <Ionicons 
-                  name={selectedBook?.isOnline ? "cloud-download" : "reader"} 
+                  name="download" 
                   size={20} 
                   color="#FFFFFF" 
                 />
                 <Text style={styles.readButtonText}>
-                  {selectedBook?.isOnline ? 'Read Online' : 'Read Offline'}
+                  Download for Offline Reading
                 </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Reader Modal for Offline Books */}
-      <Modal
-        visible={readerVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={closeReader}
-        statusBarTranslucent
-      >
-        <View style={styles.readerBackdrop}>
-          <View style={styles.readerCard}>
-            <View style={styles.readerHeader}>
-              <TouchableOpacity onPress={closeReader} style={styles.backButton}>
-                <Ionicons name="chevron-back" size={24} color={COLORS.text} />
-              </TouchableOpacity>
-              <Text style={styles.readerTitle} numberOfLines={1}>
-                {selectedBook?.title}
-              </Text>
-              <View style={styles.headerSpacer} />
-            </View>
-            
-            <View style={styles.readerBody}>
-              <View style={styles.readerIllustration}>
-                <Ionicons name="document-text" size={64} color={COLORS.primary} />
-              </View>
-              <Text style={styles.readerTitleLarge}>Offline Reader</Text>
-              <Text style={styles.readerDescription}>
-                This book is available for offline reading. In the full version, this would open a PDF viewer or ebook reader with full navigation and bookmarking features.
-              </Text>
-              
-              <View style={styles.readerStats}>
-                <View style={styles.readerStat}>
-                  <Text style={styles.readerStatNumber}>{selectedBook?.pages}</Text>
-                  <Text style={styles.readerStatLabel}>Pages</Text>
-                </View>
-                <View style={styles.readerStat}>
-                  <Text style={styles.readerStatNumber}>{selectedBook?.format}</Text>
-                  <Text style={styles.readerStatLabel}>Format</Text>
-                </View>
-                <View style={styles.readerStat}>
-                  <Text style={styles.readerStatNumber}>{selectedBook?.rating}</Text>
-                  <Text style={styles.readerStatLabel}>Rating</Text>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.readerFooter}>
-              <TouchableOpacity style={styles.downloadButton}>
-                <Ionicons name="download" size={20} color={COLORS.primary} />
-                <Text style={styles.downloadButtonText}>Download</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.startReadingButton}>
-                <Ionicons name="play" size={20} color="#FFFFFF" />
-                <Text style={styles.startReadingText}>Start Reading</Text>
               </TouchableOpacity>
             </View>
           </View>

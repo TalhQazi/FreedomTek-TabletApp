@@ -16,6 +16,7 @@ import PhotosScreen from '../../screens/Photos/PhotosScreen';
 import RequestsScreen from '../../screens/Requests/RequestsScreen';
 import ScheduleScreen from '../../screens/Schedule/ScheduleScreen';
 import SettingsStack from './SettingsStack';
+import MessagesStack from './MessagesStack';
 import BalanceInfoScreen from '../../screens/Wallet/BalanceInfoScreen';
 
 const Stack = createNativeStackNavigator();
@@ -40,6 +41,7 @@ export default function HomeStack() {
       <Stack.Screen name="Schedule" component={ScheduleScreen} />
       <Stack.Screen name="Photos" component={PhotosScreen} />
       <Stack.Screen name="Settings" component={SettingsStack} />
+      <Stack.Screen name="Messages" component={MessagesStack} />
       <Stack.Screen name="BalanceInfo" component={BalanceInfoScreen} />
     </Stack.Navigator>
   );
